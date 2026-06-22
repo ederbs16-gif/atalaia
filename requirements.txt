@@ -1,0 +1,8 @@
+PySide6==6.11.1
+SQLAlchemy==2.0.51
+alembic==1.18.4
+mysql-connector-python==9.7.0
+python-dotenv==1.2.2
+pytest==9.1.1
+pytest-qt==4.4.0
+passlib[bcrypt]==1.7.4

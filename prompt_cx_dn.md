@@ -1,0 +1,3 @@
+Banco e usuário já existem (atalaia_app com privilégios em atalaia). Crie o .env com DB_HOST=localhost, DB_PORT=3306, DB_USER=atalaia_app, DB_NAME=atalaia, DB_PASSWORD=9qmid950
+
+Depois disso, gere a migration com alembic revision --autogenerate -m "cria tabelas usuarios e configuracoes" e me mostre o conteúdo completo do arquivo gerado antes de rodar alembic upgrade head, incluindo a mudança de server_default=func.now() em criado_em que você já aplicou no model.
