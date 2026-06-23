@@ -117,13 +117,8 @@ Toda constraint gerada pelos models herda automaticamente a convenção definida
 | `categorias` | Categorias de produtos |
 | `produtos` | Produtos físicos e serviços vendidos/orçados; campos `preco_custo`, `preco_custo_anterior`, `custo_medio` (todos nullable) |
 | `fornecedores` | Fornecedores de mercadoria; soft-delete via `ativo=False`; sem UNIQUE em `nome` ou `documento` (ver docstring do model) |
-| `clientes` | Clientes do estabelecimento; soft-delete via `ativo=False`; sem UNIQUE em `nome` ou `documento`; histórico de compras será adicionado após Orçamentos e PDV existirem como fonte de dados |
 | `entradas_mercadorias` | Cabeçalho de entrada de mercadoria; status `rascunho` ou `confirmada`; FK para `fornecedores` |
 | `itens_entrada` | Itens de uma entrada; FK para `entradas_mercadorias` e `produtos`; CHECKs: `quantidade > 0`, `custo_unitario >= 0` |
-| `orcamentos` | Orçamentos emitidos; status `aberto`/`aprovado`/`recusado`; `numero` via `max+1` em Python (não autoincrement); `data_criacao` via `date.today()` em Python (sem server_default); FK para `clientes` |
-| `itens_orcamento` | Itens de um orçamento; FK para `orcamentos` e `produtos`; `preco_unitario` congelado no momento da adição via `obter_preco_vigente()`; CHECK `quantidade > 0` |
-| `vendas` | Venda gerada ao aprovar orçamento; status `aberta`/`finalizada`/`cancelada`; FK nullable para `orcamentos` e `clientes` |
-| `itens_venda` | Itens de uma venda; FK para `vendas` e `produtos`; CHECK `quantidade > 0` |
 
 ### Regras de negócio persistidas no banco
 
@@ -168,9 +163,7 @@ session.execute(
 
 **Por quê:** leitura → cálculo → escrita em Python cria race condition entre sessões concorrentes (duas sessões leem o mesmo estoque e ambas "aprovam" a venda antes de qualquer uma gravar). O UPDATE atômico resolve isso no nível do banco.
 
-**Onde se repete:** `modules/produtos/service.py` → `modules/entrada_mercadorias/` → `modules/orcamentos/service.py` (`aprovar_orcamento`) → `modules/pdv/`. Qualquer novo módulo que mexa em `estoque_atual` deve seguir este padrão.
-
-**`aprovar_orcamento` — transação atômica única:** status + Venda + ItemVenda + UPDATE estoque de cada item acontecem dentro de uma única `get_session()`. Commit só ocorre se tudo passar; qualquer exceção (incluindo `EstoqueInsuficienteError`) faz rollback completo. Orçamentos aprovados geram automaticamente uma `Venda` com `status='finalizada'`.
+**Onde se repete:** `modules/produtos/service.py` → `modules/entrada_mercadorias/` → `modules/pdv/`. Qualquer novo módulo que mexa em `estoque_atual` deve seguir este padrão.
 
 ## Convenções de UI (PySide6)
 

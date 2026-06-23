@@ -176,19 +176,70 @@ def obter_entrada(entrada_id: int) -> EntradaMercadoria:
         return entrada
 
 
+def atualizar_rascunho(
+    entrada_id: int,
+    fornecedor_id: int | None = None,
+    numero_nota: str | None = None,
+    data_entrada: date | None = None,
+    observacoes: str | None = None,
+) -> EntradaMercadoria:
+    with get_session() as session:
+        entrada = session.get(EntradaMercadoria, entrada_id)
+        if entrada is None:
+            raise ValueError(f"Entrada {entrada_id} não encontrada.")
+        if entrada.status == StatusEntradaEnum.confirmada:
+            raise EntradaJaConfirmadaError(
+                f"Entrada {entrada_id} já está confirmada e não pode ser alterada."
+            )
+        if fornecedor_id is not None:
+            fornecedor = session.get(Fornecedor, fornecedor_id)
+            if fornecedor is None:
+                raise FornecedorNaoEncontradoError(f"Fornecedor {fornecedor_id} não encontrado.")
+            if not fornecedor.ativo:
+                raise FornecedorInativoError(f"Fornecedor '{fornecedor.nome}' está inativo.")
+            entrada.fornecedor_id = fornecedor_id
+        if numero_nota is not None:
+            entrada.numero_nota = numero_nota
+        if data_entrada is not None:
+            entrada.data_entrada = data_entrada
+        if observacoes is not None:
+            entrada.observacoes = observacoes
+        session.flush()
+        session.expunge(entrada)
+        return entrada
+
+
+def excluir_rascunho(entrada_id: int) -> None:
+    with get_session() as session:
+        entrada = session.get(EntradaMercadoria, entrada_id)
+        if entrada is None:
+            raise ValueError(f"Entrada {entrada_id} não encontrada.")
+        if entrada.status == StatusEntradaEnum.confirmada:
+            raise EntradaJaConfirmadaError(
+                f"Entrada {entrada_id} está confirmada e não pode ser excluída."
+            )
+        session.delete(entrada)
+
+
 def listar_entradas(
     status: str | None = None,
     fornecedor_id: int | None = None,
+    data_de: date | None = None,
+    data_ate: date | None = None,
 ) -> list[EntradaMercadoria]:
     with get_session() as session:
         q = session.query(EntradaMercadoria).options(
-            joinedload(EntradaMercadoria.fornecedor)
+            joinedload(EntradaMercadoria.fornecedor),
+            joinedload(EntradaMercadoria.itens),
         )
         if status is not None:
             q = q.filter(EntradaMercadoria.status == StatusEntradaEnum(status))
         if fornecedor_id is not None:
             q = q.filter(EntradaMercadoria.fornecedor_id == fornecedor_id)
+        if data_de is not None:
+            q = q.filter(EntradaMercadoria.data_entrada >= data_de)
+        if data_ate is not None:
+            q = q.filter(EntradaMercadoria.data_entrada <= data_ate)
         entradas = q.order_by(EntradaMercadoria.data_entrada.desc()).all()
-        for e in entradas:
-            session.expunge(e)
+        session.expunge_all()
         return entradas

@@ -70,6 +70,10 @@ class FormularioProduto(QDialog):
         layout = QVBoxLayout(self)
         form = QFormLayout()
 
+        self.txt_codigo_barras = QLineEdit()
+        self.txt_codigo_barras.setPlaceholderText("opcional")
+        form.addRow("Código de barras:", self.txt_codigo_barras)
+
         self.txt_nome = QLineEdit()
         form.addRow("Nome *:", self.txt_nome)
 
@@ -143,10 +147,6 @@ class FormularioProduto(QDialog):
         self.date_promo_fim.setCalendarPopup(True)
         self.date_promo_fim.setDate(QDate.currentDate())
         form.addRow("Promoção fim:", self.date_promo_fim)
-
-        self.txt_codigo_barras = QLineEdit()
-        self.txt_codigo_barras.setPlaceholderText("opcional")
-        form.addRow("Código de barras:", self.txt_codigo_barras)
 
         self.txt_unidade = QLineEdit("UN")
         form.addRow("Unidade de medida:", self.txt_unidade)
