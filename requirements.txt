@@ -6,3 +6,4 @@ python-dotenv==1.2.2
 pytest==9.1.1
 pytest-qt==4.4.0
 passlib[bcrypt]==1.7.4
+matplotlib

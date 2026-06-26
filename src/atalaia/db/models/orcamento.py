@@ -42,6 +42,7 @@ class Orcamento(Base):
         "ItemOrcamento", back_populates="orcamento", cascade="all, delete-orphan"
     )
     venda: Mapped["Venda"] = relationship("Venda", back_populates="orcamento", uselist=False)  # noqa: F821
+    contas_receber: Mapped[list["ContaReceber"]] = relationship("ContaReceber", back_populates="orcamento")  # noqa: F821
 
 
 class ItemOrcamento(Base):

@@ -10,7 +10,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from atalaia.modules.orcamentos import service
+from atalaia.modules.orcamentos import service, whatsapp
+from atalaia.modules.configuracoes.service import get_config
 
 
 class VisualizacaoOrcamento(QDialog):
@@ -19,6 +20,7 @@ class VisualizacaoOrcamento(QDialog):
         self.setWindowTitle("Visualizar Orçamento")
         self.setMinimumSize(600, 500)
         self._orcamento_id = orcamento_id
+        self._orc = None
         self._setup_ui()
         self._carregar()
 
@@ -33,6 +35,9 @@ class VisualizacaoOrcamento(QDialog):
         btn_imprimir = QPushButton("Imprimir")
         btn_imprimir.clicked.connect(self._imprimir)
         row.addWidget(btn_imprimir)
+        self._btn_whatsapp = QPushButton("📱 Enviar via WhatsApp")
+        self._btn_whatsapp.clicked.connect(self._enviar_whatsapp)
+        row.addWidget(self._btn_whatsapp)
         btn_fechar = QPushButton("Fechar")
         btn_fechar.clicked.connect(self.accept)
         row.addWidget(btn_fechar)
@@ -45,6 +50,12 @@ class VisualizacaoOrcamento(QDialog):
             QMessageBox.critical(self, "Erro", str(e))
             self.reject()
             return
+
+        self._orc = orc
+        tem_telefone = bool(
+            orc.cliente and orc.cliente.telefone and orc.cliente.telefone.strip()
+        )
+        self._btn_whatsapp.setEnabled(tem_telefone)
 
         configs = service.carregar_configs([
             "empresa_nome", "empresa_endereco", "empresa_telefone", "empresa_cnpj"
@@ -116,6 +127,23 @@ class VisualizacaoOrcamento(QDialog):
         {f"<p><i>Observações: {orc.observacoes}</i></p>" if orc.observacoes else ""}
         </body></html>
         """
+
+    def _enviar_whatsapp(self) -> None:
+        if self._orc is None:
+            return
+        if not (self._orc.cliente and self._orc.cliente.telefone and self._orc.cliente.telefone.strip()):
+            QMessageBox.warning(
+                self, "Sem telefone",
+                "Cliente não possui telefone cadastrado. "
+                "Cadastre o telefone do cliente para usar esta função.",
+            )
+            return
+        nome_empresa = get_config("nome_empresa", "Atalaia")
+        whatsapp.abrir_whatsapp(self._orc, nome_empresa)
+        QMessageBox.information(
+            self, "WhatsApp",
+            "WhatsApp aberto! Confirme o envio no WhatsApp.",
+        )
 
     def _imprimir(self) -> None:
         printer = QPrinter(QPrinter.HighResolution)

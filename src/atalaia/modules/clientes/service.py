@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from sqlalchemy import select
+
 from atalaia.db.session import get_session
 from atalaia.db.models.cliente import Cliente
 from atalaia.modules.clientes.exceptions import ClienteNaoEncontradoError
@@ -39,10 +41,11 @@ def inativar_cliente(cliente_id: int) -> None:
 
 def listar_clientes(apenas_ativos: bool = True) -> list[Cliente]:
     with get_session() as session:
-        q = session.query(Cliente)
+        stmt = select(Cliente)
         if apenas_ativos:
-            q = q.filter(Cliente.ativo.is_(True))
-        clientes = q.order_by(Cliente.nome).all()
+            stmt = stmt.where(Cliente.ativo.is_(True))
+        stmt = stmt.order_by(Cliente.nome)
+        clientes = session.execute(stmt).scalars().all()
         for c in clientes:
             session.expunge(c)
         return clientes
@@ -60,15 +63,16 @@ def obter_cliente(cliente_id: int) -> Cliente:
 def buscar_clientes_por_termo(termo: str, apenas_ativos: bool = True) -> list[Cliente]:
     """Filtra clientes por nome OU documento (contém, case-insensitive) via LIKE no banco."""
     with get_session() as session:
-        q = session.query(Cliente)
+        stmt = select(Cliente)
         if apenas_ativos:
-            q = q.filter(Cliente.ativo.is_(True))
+            stmt = stmt.where(Cliente.ativo.is_(True))
         if termo.strip():
             padrao = f"%{termo.strip()}%"
-            q = q.filter(
+            stmt = stmt.where(
                 Cliente.nome.ilike(padrao) | Cliente.documento.ilike(padrao)
             )
-        clientes = q.order_by(Cliente.nome).all()
+        stmt = stmt.order_by(Cliente.nome)
+        clientes = session.execute(stmt).scalars().all()
         for c in clientes:
             session.expunge(c)
         return clientes

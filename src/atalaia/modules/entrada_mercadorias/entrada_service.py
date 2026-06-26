@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import Numeric, bindparam, text
+from sqlalchemy import Numeric, bindparam, select, text
 from sqlalchemy.orm import joinedload
 
 from atalaia.db.session import get_session
@@ -114,7 +114,11 @@ def confirmar_entrada(entrada_id: int) -> None:
     ao calcular custo_medio.
     """
     with get_session() as session:
-        entrada = session.get(EntradaMercadoria, entrada_id, options=[joinedload(EntradaMercadoria.itens)])
+        entrada = session.execute(
+            select(EntradaMercadoria)
+            .where(EntradaMercadoria.id == entrada_id)
+            .options(joinedload(EntradaMercadoria.itens))
+        ).unique().scalar_one_or_none()
         if entrada is None:
             raise ValueError(f"Entrada {entrada_id} não encontrada.")
         if entrada.status == StatusEntradaEnum.confirmada:
@@ -161,15 +165,14 @@ def confirmar_entrada(entrada_id: int) -> None:
 
 def obter_entrada(entrada_id: int) -> EntradaMercadoria:
     with get_session() as session:
-        entrada = (
-            session.query(EntradaMercadoria)
+        entrada = session.execute(
+            select(EntradaMercadoria)
             .options(
                 joinedload(EntradaMercadoria.fornecedor),
                 joinedload(EntradaMercadoria.itens).joinedload(ItemEntrada.produto),
             )
-            .filter(EntradaMercadoria.id == entrada_id)
-            .first()
-        )
+            .where(EntradaMercadoria.id == entrada_id)
+        ).unique().scalar_one_or_none()
         if entrada is None:
             raise ValueError(f"Entrada {entrada_id} não encontrada.")
         session.expunge_all()
@@ -228,18 +231,19 @@ def listar_entradas(
     data_ate: date | None = None,
 ) -> list[EntradaMercadoria]:
     with get_session() as session:
-        q = session.query(EntradaMercadoria).options(
+        stmt = select(EntradaMercadoria).options(
             joinedload(EntradaMercadoria.fornecedor),
             joinedload(EntradaMercadoria.itens),
         )
         if status is not None:
-            q = q.filter(EntradaMercadoria.status == StatusEntradaEnum(status))
+            stmt = stmt.where(EntradaMercadoria.status == StatusEntradaEnum(status))
         if fornecedor_id is not None:
-            q = q.filter(EntradaMercadoria.fornecedor_id == fornecedor_id)
+            stmt = stmt.where(EntradaMercadoria.fornecedor_id == fornecedor_id)
         if data_de is not None:
-            q = q.filter(EntradaMercadoria.data_entrada >= data_de)
+            stmt = stmt.where(EntradaMercadoria.data_entrada >= data_de)
         if data_ate is not None:
-            q = q.filter(EntradaMercadoria.data_entrada <= data_ate)
-        entradas = q.order_by(EntradaMercadoria.data_entrada.desc()).all()
+            stmt = stmt.where(EntradaMercadoria.data_entrada <= data_ate)
+        stmt = stmt.order_by(EntradaMercadoria.data_entrada.desc())
+        entradas = session.execute(stmt).unique().scalars().all()
         session.expunge_all()
         return entradas

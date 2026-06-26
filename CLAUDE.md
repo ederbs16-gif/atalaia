@@ -6,10 +6,13 @@
 - **Banco**: MySQL acessado via SQLAlchemy 2.x (ORM declarativo + `DeclarativeBase`)
 - **Migrations**: Alembic (migrations versionadas — ver regras abaixo)
 - **Driver MySQL**: mysql-connector-python
-- **Configuração**: python-dotenv (variáveis de ambiente via `.env`)
+- **Configuração**: python-dotenv (variáveis de ambiente via `.env`) + `config.ini` local por PC (ver abaixo)
 - **Testes**: pytest
 - **Cupom fiscal (futuro)**: python-escpos (módulo `pdv/` reservado)
 - **Empacotamento (futuro)**: PyInstaller
+- **hash ultimo Commit valido f93d9e0 (HEAD -> main, origin/main) UI criadas
+- **hash commit inicial ce50457 
+
 
 
 ## Convenções de nomenclatura
@@ -122,8 +125,25 @@ Toda constraint gerada pelos models herda automaticamente a convenção definida
 | `itens_entrada` | Itens de uma entrada; FK para `entradas_mercadorias` e `produtos`; CHECKs: `quantidade > 0`, `custo_unitario >= 0` |
 | `orcamentos` | Orçamentos emitidos; status `aberto`/`aprovado`/`recusado`; `numero` via `max+1` em Python (não autoincrement); `data_criacao` via `date.today()` em Python (sem server_default); FK para `clientes` |
 | `itens_orcamento` | Itens de um orçamento; FK para `orcamentos` e `produtos`; `preco_unitario` congelado no momento da adição via `obter_preco_vigente()`; CHECK `quantidade > 0` |
-| `vendas` | Venda gerada ao aprovar orçamento; status `aberta`/`finalizada`/`cancelada`; FK nullable para `orcamentos` e `clientes` |
+| `vendas` | Venda iniciada no PDV; status `aberta`/`finalizada`/`cancelada`; FK nullable para `orcamentos`, `clientes` e `caixas`; `forma_pagamento_principal` = forma com maior valor pago |
 | `itens_venda` | Itens de uma venda; FK para `vendas` e `produtos`; CHECK `quantidade > 0` |
+| `caixas` | Registro de abertura/fechamento de caixa; status `aberto`/`fechado`; campos de totais por forma de pagamento (dinheiro/pix/debito/credito); `hostname` identifica a máquina |
+| `contas_pagar` | Contas a pagar; status `pendente`/`pago_parcialmente`/`pago`; CHECK `valor_total > 0`; FK nullable para `fornecedores`; suporte a parcelamento via `grupo_parcelas` UUID |
+| `pagamentos_conta_pagar` | Pagamentos de conta a pagar; CHECK `valor > 0`; forma `dinheiro`/`pix`/`debito`/`credito` |
+| `contas_receber` | Contas a receber; mesmos campos de contas_pagar + FK nullable para `clientes` e `orcamentos` |
+| `pagamentos_conta_receber` | Pagamentos de conta a receber; mesmo schema de pagamentos_conta_pagar |
+| `pagamentos_venda` | Pagamentos de uma venda; forma `dinheiro`/`pix`/`debito`/`credito`; CHECK `valor > 0`; FK para `vendas` |
+| `devolucoes` | Devoluções de venda; tipo `troca`/`reembolso`; status `pendente`/`concluida`; `valor_reembolso` calculado com desconto proporcional |
+| `itens_devolucao` | Itens devolvidos; FK para `devolucoes` e `produtos`; `produto_substituto_id` FK nullable para trocas; CHECK `quantidade > 0` |
+
+### Lógica `caixa_individual` (config key)
+
+A chave `caixa_individual` em `configuracoes` controla se o sistema permite um único caixa aberto para toda a rede ou um por máquina:
+
+- `caixa_individual = 'false'` (padrão / ausente): apenas um caixa aberto em todo o sistema. `abrir_caixa` levanta `CaixaJaAbertoError` se qualquer caixa estiver aberto.
+- `caixa_individual = 'true'`: um caixa aberto por `hostname` (`socket.gethostname()`). Permite que cada PC da rede abra seu próprio caixa simultaneamente.
+
+A função `_caixa_individual()` em `caixa_service.py` lê essa configuração e retorna `bool`. Toda função de caixa que depende desse comportamento chama `_caixa_individual()` no início.
 
 ### Regras de negócio persistidas no banco
 
@@ -137,7 +157,7 @@ Toda constraint gerada pelos models herda automaticamente a convenção definida
 
 **Estoque nunca negativo (decisão deliberada):** o sistema proíbe estoque negativo por design, diferente do sistema legado que permitia. A regra é reforçada em duas camadas:
 1. `CHECK (estoque_atual >= 0)` no banco — bloqueia qualquer INSERT/UPDATE inválido.
-2. Futuramente: validação na camada de negócio do PDV antes de confirmar a venda, para retornar erro amigável ao operador antes de tentar gravar.
+2. `finalizar_venda()` em `pdv/venda_service.py` valida estoque via UPDATE atômico antes de commitar — retorna `EstoqueInsuficienteError` ao operador se rowcount=0.
 
 ## Atualização atômica de estoque
 
@@ -170,7 +190,7 @@ session.execute(
 
 **Onde se repete:** `modules/produtos/service.py` → `modules/entrada_mercadorias/` → `modules/orcamentos/service.py` (`aprovar_orcamento`) → `modules/pdv/`. Qualquer novo módulo que mexa em `estoque_atual` deve seguir este padrão.
 
-**`aprovar_orcamento` — transação atômica única:** status + Venda + ItemVenda + UPDATE estoque de cada item acontecem dentro de uma única `get_session()`. Commit só ocorre se tudo passar; qualquer exceção (incluindo `EstoqueInsuficienteError`) faz rollback completo. Orçamentos aprovados geram automaticamente uma `Venda` com `status='finalizada'`.
+**`finalizar_venda` — transação atômica única (PDV):** verificação de pagamento + UPDATE estoque de cada item + `status='finalizada'` acontecem dentro de uma única `get_session()`. Commit só ocorre se tudo passar; qualquer exceção (incluindo `EstoqueInsuficienteError`) faz rollback completo. `adicionar_item` verifica disponibilidade mas **não baixa** estoque — só `finalizar_venda` faz a baixa. Após o commit, `registrar_pagamento_caixa` é chamado por forma de pagamento (sessões separadas — log de auditoria, não crítico para a venda).
 
 ## Convenções de UI (PySide6)
 
@@ -181,6 +201,31 @@ session.execute(
 ## Busca de fornecedores — `buscar_fornecedores_por_termo`
 
 `fornecedor_service.buscar_fornecedores_por_termo(termo, apenas_ativos=True)` filtra fornecedores por nome **OU** documento via `LIKE %termo%` (case-insensitive) diretamente no banco — nunca filtro em memória. Termo vazio retorna todos. Parâmetro `apenas_ativos=False` inclui fornecedores inativos (usado no combo "Todos" de `TelaFornecedores`).
+
+## Arquitetura de configuração — híbrida banco + config.ini
+
+O sistema usa duas camadas de configuração:
+
+| Camada | Arquivo | Escopo | Módulo |
+|---|---|---|---|
+| Dados de negócio | MySQL `configuracoes` | Compartilhado (rede) | `modules/configuracoes/service.py` |
+| Preferências locais | `config.ini` | Por PC | `src/atalaia/config_local.py` |
+
+**`config.ini`** — criado automaticamente na raiz do projeto se não existir, **no `.gitignore`**. Lido pelo singleton `ConfigLocal.instancia()`. Seções: `[interface]`, `[impressora]`, `[banco]`, `[backup]`, `[sistema]`.
+
+**Chaves padrão em `configuracoes` (MySQL):**
+
+| Grupo | Chave | Padrão |
+|---|---|---|
+| Empresa | `nome_empresa`, `cnpj`, `endereco`, `telefone`, `email`, `site`, `logo_path` | `""` |
+| PIX | `pix_tipo_chave`, `pix_chave`, `pix_nome_recebedor`, `pix_cidade`, `pix_descricao` | `""` |
+| Sistema | `validade_orcamento_dias` | `"10"` |
+| Sistema | `caixa_individual` | `"false"` |
+| Sistema | `desconto_maximo_global` | `"100"` |
+
+**Atenção:** `Configuracao` usa `id` (int autoincrement) como PK — `chave` é UNIQUE mas não é PK. Sempre usar `select(Configuracao).where(Configuracao.chave == chave)` para buscar; nunca `session.get(Configuracao, chave)`.
+
+**Senha do programador (backup_service.py):** apenas o hash bcrypt é armazenado em código como `_SENHA_HASH`. Nunca expor a senha original no código ou nos testes. Testes de senha correta usam a variável de ambiente `PROGRAMADOR_SENHA`.
 
 ## Regras inegociáveis
 1. **Nunca commitar `.env` ou qualquer credencial** — o arquivo está no `.gitignore`.

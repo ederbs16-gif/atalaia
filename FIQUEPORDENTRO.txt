@@ -1,0 +1,832 @@
+apenas escute ate eu terminar de te dar todo o contexto
+
+estou desenvolvendo um app em python,
+
+# Atalaia — Guia para Claude
+
+
+
+## Stack técnica
+
+- **Python** 3.11+
+
+- **Interface**: PySide6 (Qt6 para Python)
+
+- **Banco**: MySQL acessado via SQLAlchemy 2.x (ORM declarativo + `DeclarativeBase`)
+
+- **Migrations**: Alembic (migrations versionadas — ver regras abaixo)
+
+- **Driver MySQL**: mysql-connector-python
+
+- **Configuração**: python-dotenv (variáveis de ambiente via `.env`) + `config.ini` local por PC (ver abaixo)
+
+- **Testes**: pytest
+
+- **Cupom fiscal (futuro)**: python-escpos (módulo `pdv/` reservado)
+
+- **Empacotamento (futuro)**: PyInstaller
+
+- **hash ultimo Commit valido f93d9e0 (HEAD -> main, origin/main) UI criadas
+
+- **hash commit inicial ce50457 
+
+
+
+
+
+
+
+## Convenções de nomenclatura
+
+- Arquivos e módulos Python: `snake_case`
+
+- Classes Python: `PascalCase`
+
+- Tabelas e colunas do banco: em **português**, `snake_case`
+
+- Nomes de tabela no **plural**: `produtos`, `categorias`, `usuarios`, `orcamentos`
+
+- Variáveis de ambiente: `UPPER_SNAKE_CASE`
+
+
+
+## Estrutura de pastas
+
+```
+
+src/atalaia/
+
+  config.py              — carrega variáveis de ambiente e monta DATABASE_URL
+
+  main.py                — entrypoint: inicializa QApplication e abre MainWindow
+
+  db/
+
+    base.py              — DeclarativeBase compartilhada por todos os models
+
+    session.py           — engine + SessionLocal
+
+    models/              — um arquivo por entidade (ex: produto.py, usuario.py)
+
+  modules/               — um subpacote por módulo de negócio
+
+    produtos/            — cadastro de produtos e controle de estoque
+
+    orcamento/           — geração e gestão de orçamentos
+
+    entrada_mercadorias/ — registro de entrada de estoque
+
+    pdv/                 — ponto de venda + cupom ESC/POS
+
+    relatorios/          — relatórios gerenciais
+
+  ui/
+
+    main_window.py       — janela principal; cada módulo adiciona sua própria tela
+
+  utils/                 — helpers reutilizáveis sem dependência de negócio
+
+tests/
+
+  conftest.py            — fixtures globais do pytest
+
+```
+
+
+
+## Comandos
+
+
+
+### Rodar a aplicação
+
+```powershell
+
+# PowerShell (Windows)
+
+$env:PYTHONPATH = "src"; python -m atalaia.main
+
+```
+
+
+
+### Rodar testes
+
+```powershell
+
+$env:PYTHONPATH = "src"; pytest
+
+```
+
+
+
+### Migrations (Alembic)
+
+```bash
+
+# Aplicar todas as migrations pendentes
+
+alembic upgrade head
+
+
+
+# Gerar nova migration a partir das mudanças nos models
+
+alembic revision --autogenerate -m "descricao_da_mudanca"
+
+```
+
+
+
+## Sessão de banco — padrão `get_session()`
+
+Todos os módulos devem acessar o banco via `get_session()` de `atalaia.db.session`:
+
+
+
+```python
+
+from atalaia.db.session import get_session
+
+
+
+with get_session() as session:
+
+    # session faz commit automático ao sair sem erro
+
+    # session faz rollback automático se houver exceção
+
+    result = session.execute(...)
+
+```
+
+
+
+Nunca instanciar `SessionLocal` diretamente fora de `session.py`.
+
+
+
+## Hash de senha — padrão passlib/bcrypt
+
+Senhas de usuários **nunca** são armazenadas em texto puro. Use `passlib` com bcrypt:
+
+
+
+```python
+
+from passlib.context import CryptContext
+
+
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+
+
+# Gerar hash (no cadastro/alteração de senha)
+
+senha_hash = pwd_context.hash(senha_digitada)
+
+
+
+# Verificar senha (no login)
+
+ok = pwd_context.verify(senha_digitada, usuario.senha_hash)
+
+```
+
+
+
+O campo `senha_hash` do model `Usuario` armazena exclusivamente o resultado de `pwd_context.hash()`.
+
+
+
+## Naming convention de constraints (SQLAlchemy + Alembic)
+
+
+
+Toda constraint gerada pelos models herda automaticamente a convenção definida em `src/atalaia/db/base.py` via `MetaData(naming_convention=...)`. Os padrões são:
+
+
+
+| Tipo | Padrão | Exemplo |
+
+|---|---|---|
+
+| Index | `ix_%(column_0_label)s` | `ix_usuarios_login` |
+
+| Unique | `uq_%(table_name)s_%(column_0_name)s` | `uq_usuarios_login` |
+
+| Check | `ck_%(table_name)s_%(constraint_name)s` | `ck_usuarios_ativo` |
+
+| Foreign key | `fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s` | `fk_itens_produto_id_produtos` |
+
+| Primary key | `pk_%(table_name)s` | `pk_usuarios` |
+
+
+
+**Regra:** nunca nomear constraints manualmente nos models — deixar a convenção gerar o nome. O Alembic usa esses nomes para detectar renomeações e gerar `ALTER` corretos no `--autogenerate`. Toda nova tabela criada em qualquer módulo futuro herda essa convenção automaticamente via `Base`.
+
+
+
+## Schema atual (tabelas em produção)
+
+
+
+| Tabela | Descrição |
+
+|---|---|
+
+| `usuarios` | Usuários do sistema com perfil `admin` ou `operador` |
+
+| `configuracoes` | Pares chave/valor de configuração global |
+
+| `categorias` | Categorias de produtos |
+
+| `produtos` | Produtos físicos e serviços vendidos/orçados; campos `preco_custo`, `preco_custo_anterior`, `custo_medio` (todos nullable) |
+
+| `fornecedores` | Fornecedores de mercadoria; soft-delete via `ativo=False`; sem UNIQUE em `nome` ou `documento` (ver docstring do model) |
+
+| `clientes` | Clientes do estabelecimento; soft-delete via `ativo=False`; sem UNIQUE em `nome` ou `documento`; histórico de compras será adicionado após Orçamentos e PDV existirem como fonte de dados |
+
+| `entradas_mercadorias` | Cabeçalho de entrada de mercadoria; status `rascunho` ou `confirmada`; FK para `fornecedores` |
+
+| `itens_entrada` | Itens de uma entrada; FK para `entradas_mercadorias` e `produtos`; CHECKs: `quantidade > 0`, `custo_unitario >= 0` |
+
+| `orcamentos` | Orçamentos emitidos; status `aberto`/`aprovado`/`recusado`; `numero` via `max+1` em Python (não autoincrement); `data_criacao` via `date.today()` em Python (sem server_default); FK para `clientes` |
+
+| `itens_orcamento` | Itens de um orçamento; FK para `orcamentos` e `produtos`; `preco_unitario` congelado no momento da adição via `obter_preco_vigente()`; CHECK `quantidade > 0` |
+
+| `vendas` | Venda iniciada no PDV; status `aberta`/`finalizada`/`cancelada`; FK nullable para `orcamentos`, `clientes` e `caixas`; `forma_pagamento_principal` = forma com maior valor pago |
+
+| `itens_venda` | Itens de uma venda; FK para `vendas` e `produtos`; CHECK `quantidade > 0` |
+
+| `caixas` | Registro de abertura/fechamento de caixa; status `aberto`/`fechado`; campos de totais por forma de pagamento (dinheiro/pix/debito/credito); `hostname` identifica a máquina |
+
+| `contas_pagar` | Contas a pagar; status `pendente`/`pago_parcialmente`/`pago`; CHECK `valor_total > 0`; FK nullable para `fornecedores`; suporte a parcelamento via `grupo_parcelas` UUID |
+
+| `pagamentos_conta_pagar` | Pagamentos de conta a pagar; CHECK `valor > 0`; forma `dinheiro`/`pix`/`debito`/`credito` |
+
+| `contas_receber` | Contas a receber; mesmos campos de contas_pagar + FK nullable para `clientes` e `orcamentos` |
+
+| `pagamentos_conta_receber` | Pagamentos de conta a receber; mesmo schema de pagamentos_conta_pagar |
+
+| `pagamentos_venda` | Pagamentos de uma venda; forma `dinheiro`/`pix`/`debito`/`credito`; CHECK `valor > 0`; FK para `vendas` |
+
+| `devolucoes` | Devoluções de venda; tipo `troca`/`reembolso`; status `pendente`/`concluida`; `valor_reembolso` calculado com desconto proporcional |
+
+| `itens_devolucao` | Itens devolvidos; FK para `devolucoes` e `produtos`; `produto_substituto_id` FK nullable para trocas; CHECK `quantidade > 0` |
+
+
+
+### Lógica `caixa_individual` (config key)
+
+
+
+A chave `caixa_individual` em `configuracoes` controla se o sistema permite um único caixa aberto para toda a rede ou um por máquina:
+
+
+
+- `caixa_individual = 'false'` (padrão / ausente): apenas um caixa aberto em todo o sistema. `abrir_caixa` levanta `CaixaJaAbertoError` se qualquer caixa estiver aberto.
+
+- `caixa_individual = 'true'`: um caixa aberto por `hostname` (`socket.gethostname()`). Permite que cada PC da rede abra seu próprio caixa simultaneamente.
+
+
+
+A função `_caixa_individual()` em `caixa_service.py` lê essa configuração e retorna `bool`. Toda função de caixa que depende desse comportamento chama `_caixa_individual()` no início.
+
+
+
+### Regras de negócio persistidas no banco
+
+
+
+**Soft-delete em produtos:** produtos nunca são excluídos fisicamente do banco — apenas marcados como `ativo=False`. Produtos referenciados em vendas ou orçamentos passados devem permanecer acessíveis para histórico. Toda listagem de produtos ativos deve filtrar por `ativo=True`.
+
+
+
+**`excluir_rascunho` — única exceção ao soft-delete do projeto:** rascunhos não confirmados são deletados fisicamente via `entrada_service.excluir_rascunho()`. Um rascunho nunca confirmado não tem valor histórico fiscal, então hard delete é correto. O cascade `all, delete-orphan` no relationship `itens` remove os `ItemEntrada` automaticamente. Entradas confirmadas nunca são deletadas — `excluir_rascunho` levanta `EntradaJaConfirmadaError` se status='confirmada'.
+
+
+
+**Entradas confirmadas são imutáveis:** uma `EntradaMercadoria` com `status='confirmada'` não pode ter itens adicionados, removidos nem ser confirmada novamente. Qualquer tentativa levanta `EntradaJaConfirmadaError`. Essa imutabilidade garante rastreabilidade fiscal: o histórico de entradas reflete exatamente o que foi recebido.
+
+
+
+**Custo médio — média simples dos dois últimos custos (decisão deliberada):** ao confirmar uma entrada, o custo do produto é atualizado assim: `preco_custo_anterior ← preco_custo atual`, `preco_custo ← custo_unitario do item`, `custo_medio ← (preco_custo_anterior + preco_custo) / 2`. Se `preco_custo` era `NULL` (primeiro custo registrado), `custo_medio = novo_custo`. Essa média simples de dois pontos foi escolhida intencionalmente em vez de média ponderada por volume — suficiente para o porte do negócio e fácil de auditar manualmente.
+
+
+
+**Estoque nunca negativo (decisão deliberada):** o sistema proíbe estoque negativo por design, diferente do sistema legado que permitia. A regra é reforçada em duas camadas:
+
+1. `CHECK (estoque_atual >= 0)` no banco — bloqueia qualquer INSERT/UPDATE inválido.
+
+2. `finalizar_venda()` em `pdv/venda_service.py` valida estoque via UPDATE atômico antes de commitar — retorna `EstoqueInsuficienteError` ao operador se rowcount=0.
+
+
+
+## Atualização atômica de estoque
+
+
+
+Operações de entrada e saída de estoque **nunca** usam leitura seguida de escrita em Python. O padrão obrigatório é um único UPDATE com condição embutida no WHERE:
+
+
+
+```python
+
+# Baixa — atômico, sem race condition
+
+session.execute(
+
+    text(
+
+        "UPDATE produtos"
+
+        " SET estoque_atual = estoque_atual - :qtd"
+
+        " WHERE id = :id AND controla_estoque = TRUE AND estoque_atual >= :qtd"
+
+    ),
+
+    {"qtd": quantidade, "id": produto_id},
+
+)
+
+# rowcount == 0 → estoque insuficiente ou produto sem controle; tratar após
+
+
+
+# Entrada — atômico
+
+session.execute(
+
+    text(
+
+        "UPDATE produtos"
+
+        " SET estoque_atual = estoque_atual + :qtd"
+
+        " WHERE id = :id AND controla_estoque = TRUE"
+
+    ),
+
+    {"qtd": quantidade, "id": produto_id},
+
+)
+
+```
+
+
+
+**Por quê:** leitura → cálculo → escrita em Python cria race condition entre sessões concorrentes (duas sessões leem o mesmo estoque e ambas "aprovam" a venda antes de qualquer uma gravar). O UPDATE atômico resolve isso no nível do banco.
+
+
+
+**Onde se repete:** `modules/produtos/service.py` → `modules/entrada_mercadorias/` → `modules/orcamentos/service.py` (`aprovar_orcamento`) → `modules/pdv/`. Qualquer novo módulo que mexa em `estoque_atual` deve seguir este padrão.
+
+
+
+**`finalizar_venda` — transação atômica única (PDV):** verificação de pagamento + UPDATE estoque de cada item + `status='finalizada'` acontecem dentro de uma única `get_session()`. Commit só ocorre se tudo passar; qualquer exceção (incluindo `EstoqueInsuficienteError`) faz rollback completo. `adicionar_item` verifica disponibilidade mas **não baixa** estoque — só `finalizar_venda` faz a baixa. Após o commit, `registrar_pagamento_caixa` é chamado por forma de pagamento (sessões separadas — log de auditoria, não crítico para a venda).
+
+
+
+## Convenções de UI (PySide6)
+
+
+
+**Acesso ao banco:** telas nunca importam `get_session()` nem fazem queries diretamente. Toda leitura e escrita passa pelas funções de `service.py` do módulo correspondente. Exceções do service são capturadas e exibidas via `QMessageBox.critical` — nunca como traceback cru.
+
+
+
+**Listagens:** usar `QTableView` + subclasse de `QAbstractTableModel` (nunca `QTableWidget`). O model expõe `atualizar(lista)` + `produto_em_linha(row)` e implementa `data()` com suporte a `DisplayRole`, `BackgroundRole`, `ForegroundRole` e `TextAlignmentRole`. Esse padrão se repete em todos os módulos futuros.
+
+
+
+## Busca de fornecedores — `buscar_fornecedores_por_termo`
+
+
+
+`fornecedor_service.buscar_fornecedores_por_termo(termo, apenas_ativos=True)` filtra fornecedores por nome **OU** documento via `LIKE %termo%` (case-insensitive) diretamente no banco — nunca filtro em memória. Termo vazio retorna todos. Parâmetro `apenas_ativos=False` inclui fornecedores inativos (usado no combo "Todos" de `TelaFornecedores`).
+
+
+
+## Arquitetura de configuração — híbrida banco + config.ini
+
+
+
+O sistema usa duas camadas de configuração:
+
+
+
+| Camada | Arquivo | Escopo | Módulo |
+
+|---|---|---|---|
+
+| Dados de negócio | MySQL `configuracoes` | Compartilhado (rede) | `modules/configuracoes/service.py` |
+
+| Preferências locais | `config.ini` | Por PC | `src/atalaia/config_local.py` |
+
+
+
+**`config.ini`** — criado automaticamente na raiz do projeto se não existir, **no `.gitignore`**. Lido pelo singleton `ConfigLocal.instancia()`. Seções: `[interface]`, `[impressora]`, `[banco]`, `[backup]`, `[sistema]`.
+
+
+
+**Chaves padrão em `configuracoes` (MySQL):**
+
+
+
+| Grupo | Chave | Padrão |
+
+|---|---|---|
+
+| Empresa | `nome_empresa`, `cnpj`, `endereco`, `telefone`, `email`, `site`, `logo_path` | `""` |
+
+| PIX | `pix_tipo_chave`, `pix_chave`, `pix_nome_recebedor`, `pix_cidade`, `pix_descricao` | `""` |
+
+| Sistema | `validade_orcamento_dias` | `"10"` |
+
+| Sistema | `caixa_individual` | `"false"` |
+
+| Sistema | `desconto_maximo_global` | `"100"` |
+
+
+
+**Atenção:** `Configuracao` usa `id` (int autoincrement) como PK — `chave` é UNIQUE mas não é PK. Sempre usar `select(Configuracao).where(Configuracao.chave == chave)` para buscar; nunca `session.get(Configuracao, chave)`.
+
+
+
+**Senha do programador (backup_service.py):** apenas o hash bcrypt é armazenado em código como `_SENHA_HASH`. Nunca expor a senha original no código ou nos testes. Testes de senha correta usam a variável de ambiente `PROGRAMADOR_SENHA`.
+
+
+
+## Regras inegociáveis
+
+1. **Nunca commitar `.env` ou qualquer credencial** — o arquivo está no `.gitignore`.
+
+2. **Toda mudança de schema vira migration** — nunca executar `ALTER TABLE` direto no servidor.
+
+   Motivo: três PCs compartilham o mesmo servidor MySQL; migrations garantem schema consistente.
+
+3. Credenciais de banco ficam exclusivamente em `.env` (nunca em código).
+
+4. **Nunca armazenar senha em texto puro** — sempre usar `passlib[bcrypt]` conforme padrão acima. 
+
+
+
+estado atual
+
+
+
+✅ Produtos, Fornecedores, Clientes, Entrada de Mercadorias
+
+
+
+✅ Orçamentos
+
+
+
+✅ Financeiro (Caixa + Contas a Pagar/Receber)
+
+
+
+✅ PDV (pagamento misto, desconto R$/%, devolução/troca)
+
+
+
+✅ Relatórios (5 relatórios, gráficos, impressão + PDF)
+
+
+
+✅ Configurações (5 abas, PIX EMV, backup, scanner de rede)
+
+
+
+✅ 190 passed, 6 skipped, 0 failed. +4 testes novos, zero regressões.
+
+
+
+✅ WhatsApp no Orçamento (wa.me link)
+
+✅Dashboard inicial (cards: contas vencendo, orçamentos pendentes, estoque baixo, vendas do dia)
+
+
+
+Próximos na fila:
+
+essa é a lista do que precisa ainda ser feito
+
+
+historico de compras no fornecedor
+Contratos e Currículos (modelos .docx com campos preenchíveis via python-docx)
+Splash screen
+Autenticação/Login (módulo Usuario já tem model e hash de senha desde o início)
+Agendamento de serviços
+Módulo Compras (sugestão por estoque mínimo)
+QR Code PIX no PDV
+Impressão ESC/POS (quando impressora estiver configurada)
+Histórico de compras no cadastro do cliente
+Atualização automática via GitHub Releases
+Módulo Financeiro expandido (fluxo de caixa mais detalhado)
+Empacotamento PyInstaller + scripts de instalação 
+
+
+
+EXEMPLOS DE COMO OS PROMPTS SÃO ESTRUTURADOS
+
+Carregue @CLAUDE.md antes de começar. Este prompt cria o módulo PDV completo. Módulos já prontos: Produtos, Clientes, Orçamentos (status 'aprovado' aguarda importação pelo PDV), Financeiro (Caixa obrigatório para vender). Última migration: f4e5121a3a16.
+
+CONTEXTO DE NEGÓCIO
+- PDV é o único ponto de entrada de dinheiro e baixa de estoque
+- Caixa deve estar aberto para permitir qualquer venda
+- Venda pode ser anônima (cliente opcional) ou vinculada a cliente
+- Produto adicionado por leitor de código de barras ou busca por nome
+- Desconto em valor fixo (R$) ou percentual (%) com conversão automática entre os dois
+- Pagamento misto: uma venda pode ter múltiplas formas de pagamento
+- Troco calculado automaticamente quando pagamento em dinheiro excede o total
+- Impressora ESC/POS preparada mas desabilitada por enquanto (configuração futura)
+- PDV abre em tela cheia (F11/showFullScreen), ESC ou botão sai do modo quiosque
+
+PARTE 1 — Models e migration
+
+1. Adicionar campos em src/atalaia/db/models/venda.py:
+   - forma_pagamento_principal: ENUM('dinheiro','pix','debito','credito'), nullable (para relatórios rápidos)
+   - caixa_id: INT, nullable, FK para caixas.id
+
+2. Criar src/atalaia/db/models/pagamento_venda.py com PagamentoVenda (tabela pagamentos_venda):
+   - id: INT, PK, autoincrement
+   - venda_id: INT, NOT NULL, FK para vendas.id
+   - forma: ENUM('dinheiro','pix','debito','credito'), NOT NULL
+   - valor: DECIMAL(10,2), NOT NULL (CHECK: valor > 0)
+   - criado_em: DATETIME, NOT NULL, server_default=func.now()
+   - relationship: venda (Venda, back_populates='pagamentos')
+
+3. Criar src/atalaia/db/models/devolucao.py com dois modelos:
+
+   Devolucao (tabela devolucoes):
+   - id: INT, PK, autoincrement
+   - venda_id: INT, NOT NULL, FK para vendas.id
+   - tipo: ENUM('troca', 'reembolso'), NOT NULL
+   - motivo: VARCHAR(500), NOT NULL
+   - valor_reembolso: DECIMAL(10,2), NOT NULL, default 0
+   - forma_reembolso: ENUM('dinheiro','pix','debito','credito'), nullable
+   - status: ENUM('pendente','concluida'), NOT NULL, default 'pendente'
+   - criado_em: DATETIME, NOT NULL, server_default=func.now()
+   - relationship: venda (Venda), itens (list[ItemDevolucao], cascade all delete-orphan)
+
+   ItemDevolucao (tabela itens_devolucao):
+   - id: INT, PK, autoincrement
+   - devolucao_id: INT, NOT NULL, FK para devolucoes.id
+   - produto_id: INT, NOT NULL, FK para produtos.id
+   - quantidade: INT, NOT NULL (CHECK: quantidade > 0)
+   - produto_substituto_id: INT, nullable, FK para produtos.id (usado em troca)
+   - relationship: devolucao, produto, produto_substituto
+
+4. Adicionar em Venda: relationship pagamentos (list[PagamentoVenda]), relationship devolucoes (list[Devolucao]).
+
+5. Gerar migration alembic revision --autogenerate -m "cria modulo pdv pagamentos e devolucoes". Mostrar conteúdo completo antes de rodar alembic upgrade head. Confirmar down_revision = 'f4e5121a3a16'.
+
+6. Não rodar alembic upgrade head ainda.
+
+PARTE 2 — Service
+
+7. Criar src/atalaia/modules/pdv/__init__.py (vazio).
+
+8. Criar src/atalaia/modules/pdv/exceptions.py:
+   - PDVError(Exception)
+   - CaixaNaoAbertoError (importar de financeiro.exceptions ou redefinir)
+   - VendaNaoEncontradaError
+   - VendaJaFinalizadaError
+   - EstoqueInsuficienteError (importar de produtos.exceptions)
+   - PagamentoInsuficienteError (soma dos pagamentos < total da venda)
+   - DescontoInvalidoError (desconto maior que o total)
+   - DevolucaoInvalidaError (quantidade devolvida maior que comprada)
+
+9. Criar src/atalaia/modules/pdv/venda_service.py:
+
+   - iniciar_venda(cliente_id: int | None) -> Venda:
+     * Verifica caixa aberto via caixa_service.obter_caixa_aberto() (CaixaNaoAbertoError se None)
+     * Cria Venda com status='aberta', caixa_id do caixa aberto
+
+   - importar_orcamento(venda_id: int, orcamento_id: int) -> Venda:
+     * Orcamento deve ter status 'aberto' ou 'aprovado'
+     * Copia itens do orçamento para a venda (preco_unitario congelado no orçamento)
+     * Seta orcamento.status = 'aprovado' se ainda estava 'aberto'
+     * Vincula orcamento_id na venda
+
+   - adicionar_item(venda_id: int, produto_id: int, quantidade: int) -> ItemVenda:
+     * Venda deve estar 'aberta'
+     * preco_unitario = obter_preco_vigente(produto, date.today())
+     * Verifica estoque disponível (produto.estoque_atual >= quantidade) mas NÃO baixa ainda (só ao finalizar)
+
+   - remover_item(item_id: int) -> None: só em venda 'aberta'
+
+   - aplicar_desconto(venda_id: int, valor: Decimal | None, percentual: Decimal | None) -> Venda:
+     * Aceita valor OU percentual (pelo menos um deve ser fornecido)
+     * Se valor fornecido: calcula percentual = (valor / subtotal) * 100
+     * Se percentual fornecido: calcula valor = subtotal * (percentual / 100)
+     * Valida que desconto não excede subtotal (DescontoInvalidoError)
+     * Respeita validar_desconto() por produto se desconto_percentual excede limite do produto
+     * Atualiza desconto_percentual na venda
+
+   - calcular_totais(venda_id: int) -> dict:
+     * Retorna: subtotal, desconto_valor, desconto_percentual, total, total_pago, troco, falta_pagar
+
+   - adicionar_pagamento(venda_id: int, forma: str, valor: Decimal) -> PagamentoVenda:
+     * Venda deve estar 'aberta'
+     * Cria PagamentoVenda
+     * Calcula troco se forma='dinheiro' e soma pagamentos > total
+
+   - finalizar_venda(venda_id: int) -> Venda:
+     * Verifica soma dos pagamentos >= total (PagamentoInsuficienteError)
+     * Para cada item: dar_baixa_estoque(produto_id, quantidade) via UPDATE atômico
+     * Registra pagamentos no caixa via caixa_service.registrar_pagamento_caixa() para cada forma
+     * Seta status='finalizada', forma_pagamento_principal (forma com maior valor)
+     * Toda operação numa única sessão (atômica)
+
+   - cancelar_venda(venda_id: int) -> None:
+     * Só vendas 'abertas' podem ser canceladas (VendaJaFinalizadaError se finalizada)
+     * Seta status='cancelada' (não precisa reverter estoque pois baixa só acontece ao finalizar)
+
+   - registrar_devolucao(venda_id: int, itens: list[dict], tipo: str, motivo: str, forma_reembolso: str | None) -> Devolucao:
+     * Venda deve estar 'finalizada'
+     * Valida que quantidade devolvida <= quantidade comprada por item (DevolucaoInvalidaError)
+     * Para cada item devolvido: dar_entrada_estoque(produto_id, quantidade) via UPDATE atômico
+     * Para troca: produto_substituto_id obrigatório, dar_baixa_estoque(substituto, quantidade)
+     * valor_reembolso = soma(item.quantidade * item.preco_unitario) com desconto proporcional
+     * Tudo atômico numa sessão
+
+   - listar_vendas(status: str | None, data_de: date | None, data_ate: date | None) -> list[Venda]
+   - obter_venda(venda_id: int) -> Venda: com joinedload de itens, pagamentos, cliente
+
+PARTE 3 — UI
+
+10. Criar src/atalaia/modules/pdv/ui/__init__.py (vazio).
+
+11. Criar src/atalaia/modules/pdv/ui/tela_pdv.py com TelaPDV(QWidget) — abre em fullscreen:
+
+    Layout em dois painéis horizontais:
+
+    Painel esquerdo (lista de itens da venda atual):
+    - Label no topo: "VENDA #ID | Cliente: Nome ou Anônimo | Caixa: Aberto"
+    - QTableView de itens: Produto, Qtd, Preço Unit., Subtotal; botão Remover por linha
+    - Campo de busca de produto (foco automático ao abrir): aceita código de barras via leitor (Enter confirma) ou texto para busca por nome
+    - Campo Quantidade (default 1)
+    - Botão "Adicionar" (ou Enter no campo de busca)
+    - Ao não encontrar produto: mesmo fluxo de Entrada e Orçamento (oferecer cadastrar)
+
+    Painel direito (totais e pagamento):
+    - Botão "Importar Orçamento": abre DialogoImportarOrcamento
+    - Cliente (opcional): campo busca + botão "+" para cadastrar
+    - Seção Desconto:
+      * Campo "R$" e campo "%" lado a lado, sincronizados (digitar num atualiza o outro automaticamente)
+      * Botão "Aplicar Desconto"
+    - Totais: Subtotal, Desconto, TOTAL em destaque (fonte grande)
+    - Seção Pagamento:
+      * 4 botões rápidos: 💵 Dinheiro | 📱 PIX | 💳 Débito | 💳 Crédito
+      * Ao clicar: abre campo de valor para aquela forma
+      * Lista de pagamentos adicionados (forma + valor + botão remover)
+      * Campo "Valor pago" e "Troco" (calculado automaticamente, em destaque quando dinheiro)
+    - Botão "FINALIZAR VENDA" (verde, grande, destaque)
+    - Botão "CANCELAR VENDA" (vermelho, menor)
+    - Botão "DEVOLUÇÃO" (abre DialogoDevolucao com venda finalizada)
+    - Botão ESC/Sair fullscreen
+
+12. Criar src/atalaia/modules/pdv/ui/dialogo_importar_orcamento.py com DialogoImportarOrcamento(QDialog):
+    - Lista orçamentos com status 'aberto' e 'aprovado'
+    - Colunas: Nº, Cliente, Data, Validade, Total, Status
+    - Duplo clique ou botão Importar seleciona o orçamento
+    - Orçamentos vencidos em vermelho mas ainda importáveis (operador decide)
+
+13. Criar src/atalaia/modules/pdv/ui/dialogo_devolucao.py com DialogoDevolucao(QDialog):
+    - Busca venda por ID ou data
+    - Mostra itens da venda selecionada
+    - Operador marca quais itens devolver e quantidade
+    - Tipo: Troca ou Reembolso
+    - Se Troca: campo produto substituto por item
+    - Motivo (obrigatório)
+    - Se Reembolso: forma de reembolso
+
+14. Atualizar main_window.py:
+    - Item PDV no sidebar abre TelaPDV em fullscreen (showFullScreen())
+    - Ao fechar TelaPDV (ESC): volta para main_window normal
+    - Tecla F11 no sidebar também abre PDV
+
+PARTE 4 — Testes
+
+15. Criar tests/test_pdv_service.py:
+    - iniciar_venda sem caixa aberto levanta CaixaNaoAbertoError
+    - adicionar_item congela preco_unitario com obter_preco_vigente()
+    - aplicar_desconto: valor R$5 numa venda de R$37 resulta em percentual correto
+    - aplicar_desconto: percentual 5% numa venda de R$37 resulta em valor correto
+    - finalizar_venda: estoque baixado atomicamente, pagamentos registrados no caixa, status='finalizada'
+    - finalizar_venda com pagamento insuficiente levanta PagamentoInsuficienteError
+    - cancelar_venda finalizada levanta VendaJaFinalizadaError
+    - registrar_devolucao: estoque retorna, produto substituto baixado (troca)
+    - registrar_devolucao com quantidade maior que comprada levanta DevolucaoInvalidaError
+
+16. Criar tests/test_ui_pdv.py (pytest-qt):
+    - smoke: TelaPDV instancia sem erro (com caixa mockado como aberto)
+    - smoke: DialogoImportarOrcamento abre sem erro
+    - smoke: DialogoDevolucao abre sem erro
+    - campos R$ e % sincronizam: digitar 5.00 em R$ com subtotal 37.00 → % = 13.51
+
+17. Atualizar CLAUDE.md: adicionar pagamentos_venda, devolucoes, itens_devolucao no schema; documentar que finalizar_venda é a única operação que baixa estoque no PDV (não adicionar_item).
+
+CRITÉRIOS DE ACEITE
+- Migration com down_revision correto
+- finalizar_venda é transação atômica: baixa estoque + registra pagamentos no caixa + muda status, tudo ou nada
+- adicionar_item NÃO baixa estoque (só finalizar_venda faz isso)
+- Sincronização R$ ↔ % no desconto funciona nos dois sentidos
+- Troco calculado automaticamente para pagamento em dinheiro
+- pytest passa em todos os testes novos e existentes (116 passed, 5 skipped era o estado anterior)
+
+Mostre o plano antes de criar os arquivos.
+
+
+Ex 2
+
+Carregue @CLAUDE.md antes de começar. Este prompt cria o Dashboard inicial do sistema, substituindo o placeholder de PDV como tela inicial e adicionando um item dedicado no sidebar.
+
+CONTEXTO
+- Queries de dados já existem em src/atalaia/modules/relatorios/queries.py
+- Dashboard é a tela que o operador vê ao abrir o sistema (não o PDV)
+- Atualização automática a cada 5 minutos via QTimer
+- Dados exibidos: resumo do dia, alertas de estoque, contas vencendo
+
+TAREFA
+
+1. Criar src/atalaia/modules/dashboard/__init__.py (vazio).
+
+2. Criar src/atalaia/modules/dashboard/service.py com:
+   - obter_dados_dashboard() -> dict: consolida todos os dados numa única chamada
+     Retorna:
+     {
+       'vendas_hoje': {'total': int, 'valor': Decimal, 'ticket_medio': Decimal},
+       'caixa_status': {'aberto': bool, 'saldo_inicial': Decimal, 'total_vendas': Decimal},
+       'orcamentos_pendentes': {'abertos': int, 'vencendo_hoje': int, 'vencidos': int},
+       'estoque_baixo': {'count': int, 'itens': list[dict]},  # top 5
+       'contas_vencer_hoje': {'count': int, 'valor': Decimal},
+       'contas_vencer_semana': {'count': int, 'valor': Decimal},
+       'contas_receber_hoje': {'count': int, 'valor': Decimal},
+     }
+     Usa get_session() uma vez, faz todas as queries dentro da mesma sessão.
+
+3. Criar src/atalaia/modules/dashboard/ui/__init__.py (vazio).
+
+4. Criar src/atalaia/modules/dashboard/ui/tela_dashboard.py com TelaDashboard(QWidget):
+
+   Layout em grid de cards, dividido em seções:
+
+   LINHA 1 — Cards de resumo do dia (4 cards horizontais):
+   - 💰 Vendas Hoje: valor total + quantidade de vendas
+   - 🏦 Caixa: status (ABERTO/FECHADO em verde/vermelho) + saldo inicial
+   - 📋 Orçamentos: abertos / vencendo hoje (laranja) / vencidos (vermelho)
+   - 📦 Estoque Baixo: quantidade de produtos abaixo do mínimo (vermelho se > 0)
+
+   LINHA 2 — Cards de alertas financeiros (2 cards):
+   - 📤 Contas a Pagar: vencendo hoje + vencendo esta semana (com valores)
+   - 📥 Contas a Receber: a receber hoje (com valor)
+
+   LINHA 3 — Lista de produtos com estoque crítico (tabela compacta):
+   - Top 5 produtos mais críticos (maior diferença entre mínimo e atual)
+   - Colunas: Produto, Estoque Atual, Mínimo, Diferença
+   - Botão "Ver todos" que navega para Relatórios → aba Estoque Baixo
+
+   Design dos cards:
+   - Fundo levemente diferente do background (ex: #252535)
+   - Borda arredondada (border-radius: 8px via QSS)
+   - Título do card em fonte menor, valor principal em fonte grande e em destaque
+   - Cor semântica: verde para positivo, laranja para atenção, vermelho para crítico
+
+   Rodapé:
+   - Label "Última atualização: HH:MM:SS"
+   - Botão "🔄 Atualizar"
+   - QTimer de 5 minutos para atualização automática
+
+5. Atualizar main_window.py:
+   - Adicionar TelaDashboard() ao QStackedWidget
+   - Adicionar item "🏠 Dashboard" no sidebar como PRIMEIRO item (antes de PDV)
+   - Dashboard é a tela selecionada por padrão ao abrir (não PDV nem Produtos)
+   - Nova ordem: Dashboard, PDV, Produtos, Clientes, Fornecedores, Entradas, Financeiro, Orçamentos, Relatórios, Configurações
+   - Adicionar dashboard.svg ao sidebar (já existe em assets/icons/)
+
+6. Criar tests/test_dashboard_service.py:
+   - obter_dados_dashboard() retorna dict com todas as chaves esperadas
+   - vendas_hoje retorna zeros quando não há vendas no dia (não levanta exceção)
+   - estoque_baixo retorna no máximo 5 itens
+   - contas_vencer_hoje retorna zero quando não há contas vencendo hoje
+
+7. Criar tests/test_ui_dashboard.py (pytest-qt, --timeout=60):
+   - smoke: TelaDashboard instancia sem erro com dados mockados
+   - smoke: QTimer de atualização existe e está ativo
+   - botão "Atualizar" chama obter_dados_dashboard()
+
+CRITÉRIOS DE ACEITE
+- Dashboard é a primeira tela ao abrir o sistema
+- Cards atualizam automaticamente a cada 5 minutos
+- Dados vazios (sem vendas, sem contas) não causam erro — exibem zeros
+- Nenhum get_session() direto em tela_dashboard.py
+- pytest passa em todos os testes novos e existentes (178 passed, 6 skipped era o estado anterior)
+
+Mostre o plano antes de criar os arquivos.

@@ -42,3 +42,4 @@ class Fornecedor(Base):
     entradas: Mapped[list["EntradaMercadoria"]] = relationship(  # noqa: F821
         "EntradaMercadoria", back_populates="fornecedor"
     )
+    contas_pagar: Mapped[list["ContaPagar"]] = relationship("ContaPagar", back_populates="fornecedor")  # noqa: F821

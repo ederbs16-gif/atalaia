@@ -1,0 +1,208 @@
+Carregue @CLAUDE.md antes de começar. Este prompt cria o módulo PDV completo. Módulos já prontos: Produtos, Clientes, Orçamentos (status 'aprovado' aguarda importação pelo PDV), Financeiro (Caixa obrigatório para vender). Última migration: f4e5121a3a16.
+
+CONTEXTO DE NEGÓCIO
+- PDV é o único ponto de entrada de dinheiro e baixa de estoque
+- Caixa deve estar aberto para permitir qualquer venda
+- Venda pode ser anônima (cliente opcional) ou vinculada a cliente
+- Produto adicionado por leitor de código de barras ou busca por nome
+- Desconto em valor fixo (R$) ou percentual (%) com conversão automática entre os dois
+- Pagamento misto: uma venda pode ter múltiplas formas de pagamento
+- Troco calculado automaticamente quando pagamento em dinheiro excede o total
+- Impressora ESC/POS preparada mas desabilitada por enquanto (configuração futura)
+- PDV abre em tela cheia (F11/showFullScreen), ESC ou botão sai do modo quiosque
+
+PARTE 1 — Models e migration
+
+1. Adicionar campos em src/atalaia/db/models/venda.py:
+   - forma_pagamento_principal: ENUM('dinheiro','pix','debito','credito'), nullable (para relatórios rápidos)
+   - caixa_id: INT, nullable, FK para caixas.id
+
+2. Criar src/atalaia/db/models/pagamento_venda.py com PagamentoVenda (tabela pagamentos_venda):
+   - id: INT, PK, autoincrement
+   - venda_id: INT, NOT NULL, FK para vendas.id
+   - forma: ENUM('dinheiro','pix','debito','credito'), NOT NULL
+   - valor: DECIMAL(10,2), NOT NULL (CHECK: valor > 0)
+   - criado_em: DATETIME, NOT NULL, server_default=func.now()
+   - relationship: venda (Venda, back_populates='pagamentos')
+
+3. Criar src/atalaia/db/models/devolucao.py com dois modelos:
+
+   Devolucao (tabela devolucoes):
+   - id: INT, PK, autoincrement
+   - venda_id: INT, NOT NULL, FK para vendas.id
+   - tipo: ENUM('troca', 'reembolso'), NOT NULL
+   - motivo: VARCHAR(500), NOT NULL
+   - valor_reembolso: DECIMAL(10,2), NOT NULL, default 0
+   - forma_reembolso: ENUM('dinheiro','pix','debito','credito'), nullable
+   - status: ENUM('pendente','concluida'), NOT NULL, default 'pendente'
+   - criado_em: DATETIME, NOT NULL, server_default=func.now()
+   - relationship: venda (Venda), itens (list[ItemDevolucao], cascade all delete-orphan)
+
+   ItemDevolucao (tabela itens_devolucao):
+   - id: INT, PK, autoincrement
+   - devolucao_id: INT, NOT NULL, FK para devolucoes.id
+   - produto_id: INT, NOT NULL, FK para produtos.id
+   - quantidade: INT, NOT NULL (CHECK: quantidade > 0)
+   - produto_substituto_id: INT, nullable, FK para produtos.id (usado em troca)
+   - relationship: devolucao, produto, produto_substituto
+
+4. Adicionar em Venda: relationship pagamentos (list[PagamentoVenda]), relationship devolucoes (list[Devolucao]).
+
+5. Gerar migration alembic revision --autogenerate -m "cria modulo pdv pagamentos e devolucoes". Mostrar conteúdo completo antes de rodar alembic upgrade head. Confirmar down_revision = 'f4e5121a3a16'.
+
+6. Não rodar alembic upgrade head ainda.
+
+PARTE 2 — Service
+
+7. Criar src/atalaia/modules/pdv/__init__.py (vazio).
+
+8. Criar src/atalaia/modules/pdv/exceptions.py:
+   - PDVError(Exception)
+   - CaixaNaoAbertoError (importar de financeiro.exceptions ou redefinir)
+   - VendaNaoEncontradaError
+   - VendaJaFinalizadaError
+   - EstoqueInsuficienteError (importar de produtos.exceptions)
+   - PagamentoInsuficienteError (soma dos pagamentos < total da venda)
+   - DescontoInvalidoError (desconto maior que o total)
+   - DevolucaoInvalidaError (quantidade devolvida maior que comprada)
+
+9. Criar src/atalaia/modules/pdv/venda_service.py:
+
+   - iniciar_venda(cliente_id: int | None) -> Venda:
+     * Verifica caixa aberto via caixa_service.obter_caixa_aberto() (CaixaNaoAbertoError se None)
+     * Cria Venda com status='aberta', caixa_id do caixa aberto
+
+   - importar_orcamento(venda_id: int, orcamento_id: int) -> Venda:
+     * Orcamento deve ter status 'aberto' ou 'aprovado'
+     * Copia itens do orçamento para a venda (preco_unitario congelado no orçamento)
+     * Seta orcamento.status = 'aprovado' se ainda estava 'aberto'
+     * Vincula orcamento_id na venda
+
+   - adicionar_item(venda_id: int, produto_id: int, quantidade: int) -> ItemVenda:
+     * Venda deve estar 'aberta'
+     * preco_unitario = obter_preco_vigente(produto, date.today())
+     * Verifica estoque disponível (produto.estoque_atual >= quantidade) mas NÃO baixa ainda (só ao finalizar)
+
+   - remover_item(item_id: int) -> None: só em venda 'aberta'
+
+   - aplicar_desconto(venda_id: int, valor: Decimal | None, percentual: Decimal | None) -> Venda:
+     * Aceita valor OU percentual (pelo menos um deve ser fornecido)
+     * Se valor fornecido: calcula percentual = (valor / subtotal) * 100
+     * Se percentual fornecido: calcula valor = subtotal * (percentual / 100)
+     * Valida que desconto não excede subtotal (DescontoInvalidoError)
+     * Respeita validar_desconto() por produto se desconto_percentual excede limite do produto
+     * Atualiza desconto_percentual na venda
+
+   - calcular_totais(venda_id: int) -> dict:
+     * Retorna: subtotal, desconto_valor, desconto_percentual, total, total_pago, troco, falta_pagar
+
+   - adicionar_pagamento(venda_id: int, forma: str, valor: Decimal) -> PagamentoVenda:
+     * Venda deve estar 'aberta'
+     * Cria PagamentoVenda
+     * Calcula troco se forma='dinheiro' e soma pagamentos > total
+
+   - finalizar_venda(venda_id: int) -> Venda:
+     * Verifica soma dos pagamentos >= total (PagamentoInsuficienteError)
+     * Para cada item: dar_baixa_estoque(produto_id, quantidade) via UPDATE atômico
+     * Registra pagamentos no caixa via caixa_service.registrar_pagamento_caixa() para cada forma
+     * Seta status='finalizada', forma_pagamento_principal (forma com maior valor)
+     * Toda operação numa única sessão (atômica)
+
+   - cancelar_venda(venda_id: int) -> None:
+     * Só vendas 'abertas' podem ser canceladas (VendaJaFinalizadaError se finalizada)
+     * Seta status='cancelada' (não precisa reverter estoque pois baixa só acontece ao finalizar)
+
+   - registrar_devolucao(venda_id: int, itens: list[dict], tipo: str, motivo: str, forma_reembolso: str | None) -> Devolucao:
+     * Venda deve estar 'finalizada'
+     * Valida que quantidade devolvida <= quantidade comprada por item (DevolucaoInvalidaError)
+     * Para cada item devolvido: dar_entrada_estoque(produto_id, quantidade) via UPDATE atômico
+     * Para troca: produto_substituto_id obrigatório, dar_baixa_estoque(substituto, quantidade)
+     * valor_reembolso = soma(item.quantidade * item.preco_unitario) com desconto proporcional
+     * Tudo atômico numa sessão
+
+   - listar_vendas(status: str | None, data_de: date | None, data_ate: date | None) -> list[Venda]
+   - obter_venda(venda_id: int) -> Venda: com joinedload de itens, pagamentos, cliente
+
+PARTE 3 — UI
+
+10. Criar src/atalaia/modules/pdv/ui/__init__.py (vazio).
+
+11. Criar src/atalaia/modules/pdv/ui/tela_pdv.py com TelaPDV(QWidget) — abre em fullscreen:
+
+    Layout em dois painéis horizontais:
+
+    Painel esquerdo (lista de itens da venda atual):
+    - Label no topo: "VENDA #ID | Cliente: Nome ou Anônimo | Caixa: Aberto"
+    - QTableView de itens: Produto, Qtd, Preço Unit., Subtotal; botão Remover por linha
+    - Campo de busca de produto (foco automático ao abrir): aceita código de barras via leitor (Enter confirma) ou texto para busca por nome
+    - Campo Quantidade (default 1)
+    - Botão "Adicionar" (ou Enter no campo de busca)
+    - Ao não encontrar produto: mesmo fluxo de Entrada e Orçamento (oferecer cadastrar)
+
+    Painel direito (totais e pagamento):
+    - Botão "Importar Orçamento": abre DialogoImportarOrcamento
+    - Cliente (opcional): campo busca + botão "+" para cadastrar
+    - Seção Desconto:
+      * Campo "R$" e campo "%" lado a lado, sincronizados (digitar num atualiza o outro automaticamente)
+      * Botão "Aplicar Desconto"
+    - Totais: Subtotal, Desconto, TOTAL em destaque (fonte grande)
+    - Seção Pagamento:
+      * 4 botões rápidos: 💵 Dinheiro | 📱 PIX | 💳 Débito | 💳 Crédito
+      * Ao clicar: abre campo de valor para aquela forma
+      * Lista de pagamentos adicionados (forma + valor + botão remover)
+      * Campo "Valor pago" e "Troco" (calculado automaticamente, em destaque quando dinheiro)
+    - Botão "FINALIZAR VENDA" (verde, grande, destaque)
+    - Botão "CANCELAR VENDA" (vermelho, menor)
+    - Botão "DEVOLUÇÃO" (abre DialogoDevolucao com venda finalizada)
+    - Botão ESC/Sair fullscreen
+
+12. Criar src/atalaia/modules/pdv/ui/dialogo_importar_orcamento.py com DialogoImportarOrcamento(QDialog):
+    - Lista orçamentos com status 'aberto' e 'aprovado'
+    - Colunas: Nº, Cliente, Data, Validade, Total, Status
+    - Duplo clique ou botão Importar seleciona o orçamento
+    - Orçamentos vencidos em vermelho mas ainda importáveis (operador decide)
+
+13. Criar src/atalaia/modules/pdv/ui/dialogo_devolucao.py com DialogoDevolucao(QDialog):
+    - Busca venda por ID ou data
+    - Mostra itens da venda selecionada
+    - Operador marca quais itens devolver e quantidade
+    - Tipo: Troca ou Reembolso
+    - Se Troca: campo produto substituto por item
+    - Motivo (obrigatório)
+    - Se Reembolso: forma de reembolso
+
+14. Atualizar main_window.py:
+    - Item PDV no sidebar abre TelaPDV em fullscreen (showFullScreen())
+    - Ao fechar TelaPDV (ESC): volta para main_window normal
+    - Tecla F11 no sidebar também abre PDV
+
+PARTE 4 — Testes
+
+15. Criar tests/test_pdv_service.py:
+    - iniciar_venda sem caixa aberto levanta CaixaNaoAbertoError
+    - adicionar_item congela preco_unitario com obter_preco_vigente()
+    - aplicar_desconto: valor R$5 numa venda de R$37 resulta em percentual correto
+    - aplicar_desconto: percentual 5% numa venda de R$37 resulta em valor correto
+    - finalizar_venda: estoque baixado atomicamente, pagamentos registrados no caixa, status='finalizada'
+    - finalizar_venda com pagamento insuficiente levanta PagamentoInsuficienteError
+    - cancelar_venda finalizada levanta VendaJaFinalizadaError
+    - registrar_devolucao: estoque retorna, produto substituto baixado (troca)
+    - registrar_devolucao com quantidade maior que comprada levanta DevolucaoInvalidaError
+
+16. Criar tests/test_ui_pdv.py (pytest-qt):
+    - smoke: TelaPDV instancia sem erro (com caixa mockado como aberto)
+    - smoke: DialogoImportarOrcamento abre sem erro
+    - smoke: DialogoDevolucao abre sem erro
+    - campos R$ e % sincronizam: digitar 5.00 em R$ com subtotal 37.00 → % = 13.51
+
+17. Atualizar CLAUDE.md: adicionar pagamentos_venda, devolucoes, itens_devolucao no schema; documentar que finalizar_venda é a única operação que baixa estoque no PDV (não adicionar_item).
+
+CRITÉRIOS DE ACEITE
+- Migration com down_revision correto
+- finalizar_venda é transação atômica: baixa estoque + registra pagamentos no caixa + muda status, tudo ou nada
+- adicionar_item NÃO baixa estoque (só finalizar_venda faz isso)
+- Sincronização R$ ↔ % no desconto funciona nos dois sentidos
+- Troco calculado automaticamente para pagamento em dinheiro
+- pytest passa em todos os testes novos e existentes (116 passed, 5 skipped era o estado anterior)
+
+Mostre o plano antes de criar os arquivos.

@@ -23,6 +23,13 @@ def patch_services(monkeypatch):
     import atalaia.modules.orcamentos.service as ors
     monkeypatch.setattr(ors, "listar_orcamentos", lambda *a, **kw: [])
 
+    import atalaia.modules.financeiro.caixa_service as cxs
+    import atalaia.modules.financeiro.contas_service as cns
+    monkeypatch.setattr(cxs, "obter_caixa_aberto", lambda: None)
+    monkeypatch.setattr(cxs, "listar_caixas", lambda *a, **kw: [])
+    monkeypatch.setattr(cns, "listar_contas_pagar", lambda *a, **kw: [])
+    monkeypatch.setattr(cns, "listar_contas_receber", lambda *a, **kw: [])
+
 
 def test_main_window_instancia_sem_erro(qtbot):
     from atalaia.ui.main_window import MainWindow

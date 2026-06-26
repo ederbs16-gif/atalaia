@@ -21,9 +21,10 @@ from atalaia.modules.orcamentos import service
 from atalaia.modules.orcamentos.exceptions import (
     OrcamentoJaFinalizadoError,
     OrcamentoVencidoError,
-    EstoqueInsuficienteError,
 )
 from atalaia.modules.orcamentos.ui.formulario_orcamento import FormularioOrcamento
+from atalaia.modules.orcamentos import whatsapp
+from atalaia.modules.configuracoes.service import get_config
 
 _COLUNAS = ["Nº", "Cliente", "Criação", "Validade", "Status", "Total"]
 _COR_VENCIDO = QColor("#c0392b")
@@ -167,6 +168,11 @@ class TelaOrcamentos(QWidget):
         self.btn_recusar.clicked.connect(self._recusar_orcamento)
         row.addWidget(self.btn_recusar)
 
+        self.btn_whatsapp = QPushButton("📱 WhatsApp")
+        self.btn_whatsapp.setEnabled(False)
+        self.btn_whatsapp.clicked.connect(self._enviar_whatsapp)
+        row.addWidget(self.btn_whatsapp)
+
         return row
 
     def _aplicar_filtros(self) -> None:
@@ -197,9 +203,15 @@ class TelaOrcamentos(QWidget):
     def _on_selecao_mudou(self, *_) -> None:
         orc = self._orcamento_selecionado()
         eh_aberto = orc is not None and orc.status.value == "aberto"
+        tem_telefone = (
+            orc is not None
+            and orc.cliente is not None
+            and bool(orc.cliente.telefone and orc.cliente.telefone.strip())
+        )
         self.btn_abrir.setEnabled(orc is not None)
         self.btn_aprovar.setEnabled(eh_aberto)
         self.btn_recusar.setEnabled(eh_aberto)
+        self.btn_whatsapp.setEnabled(tem_telefone)
 
     def _orcamento_selecionado(self):
         indexes = self.tabela.selectionModel().selectedRows()
@@ -227,7 +239,7 @@ class TelaOrcamentos(QWidget):
         resposta = QMessageBox.question(
             self,
             "Aprovar orçamento",
-            f"Aprovar {service.numero_formatado(orc)}? O estoque será baixado e uma venda será gerada.",
+            f"Aprovar {service.numero_formatado(orc)}? O orçamento ficará aguardando importação pelo PDV.",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
@@ -238,9 +250,6 @@ class TelaOrcamentos(QWidget):
         except OrcamentoVencidoError as ex:
             QMessageBox.warning(self, "Orçamento vencido", str(ex))
             return
-        except EstoqueInsuficienteError as ex:
-            QMessageBox.warning(self, "Estoque insuficiente", str(ex))
-            return
         except OrcamentoJaFinalizadoError as ex:
             QMessageBox.warning(self, "Orçamento já finalizado", str(ex))
             return
@@ -248,6 +257,24 @@ class TelaOrcamentos(QWidget):
             QMessageBox.critical(self, "Erro", f"Erro ao aprovar orçamento: {ex}")
             return
         self._aplicar_filtros()
+
+    def _enviar_whatsapp(self) -> None:
+        orc = self._orcamento_selecionado()
+        if orc is None:
+            return
+        if not (orc.cliente and orc.cliente.telefone and orc.cliente.telefone.strip()):
+            QMessageBox.warning(
+                self, "Sem telefone",
+                "Cliente não possui telefone cadastrado. "
+                "Cadastre o telefone do cliente para usar esta função.",
+            )
+            return
+        nome_empresa = get_config("nome_empresa", "Atalaia")
+        whatsapp.abrir_whatsapp(orc, nome_empresa)
+        QMessageBox.information(
+            self, "WhatsApp",
+            "WhatsApp aberto! Confirme o envio no WhatsApp.",
+        )
 
     def _recusar_orcamento(self) -> None:
         orc = self._orcamento_selecionado()

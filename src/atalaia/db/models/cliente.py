@@ -37,3 +37,4 @@ class Cliente(Base):
 
     orcamentos: Mapped[list["Orcamento"]] = relationship("Orcamento", back_populates="cliente")  # noqa: F821
     vendas: Mapped[list["Venda"]] = relationship("Venda", back_populates="cliente")  # noqa: F821
+    contas_receber: Mapped[list["ContaReceber"]] = relationship("ContaReceber", back_populates="cliente")  # noqa: F821

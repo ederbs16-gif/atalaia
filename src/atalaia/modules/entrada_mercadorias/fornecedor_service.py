@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from sqlalchemy import select
+
 from atalaia.db.session import get_session
 from atalaia.db.models.fornecedor import Fornecedor
 from atalaia.modules.entrada_mercadorias.exceptions import FornecedorNaoEncontradoError
@@ -10,15 +12,16 @@ def buscar_fornecedores_por_termo(
 ) -> list[Fornecedor]:
     """Filtra fornecedores por nome OU documento (contém, case-insensitive) via LIKE no banco."""
     with get_session() as session:
-        q = session.query(Fornecedor)
+        stmt = select(Fornecedor)
         if apenas_ativos:
-            q = q.filter(Fornecedor.ativo.is_(True))
+            stmt = stmt.where(Fornecedor.ativo.is_(True))
         if termo.strip():
             padrao = f"%{termo.strip()}%"
-            q = q.filter(
+            stmt = stmt.where(
                 Fornecedor.nome.ilike(padrao) | Fornecedor.documento.ilike(padrao)
             )
-        fornecedores = q.order_by(Fornecedor.nome).all()
+        stmt = stmt.order_by(Fornecedor.nome)
+        fornecedores = session.execute(stmt).scalars().all()
         for f in fornecedores:
             session.expunge(f)
         return fornecedores
@@ -62,10 +65,11 @@ def inativar_fornecedor(fornecedor_id: int) -> None:
 
 def listar_fornecedores(apenas_ativos: bool = True) -> list[Fornecedor]:
     with get_session() as session:
-        q = session.query(Fornecedor)
+        stmt = select(Fornecedor)
         if apenas_ativos:
-            q = q.filter(Fornecedor.ativo.is_(True))
-        fornecedores = q.order_by(Fornecedor.nome).all()
+            stmt = stmt.where(Fornecedor.ativo.is_(True))
+        stmt = stmt.order_by(Fornecedor.nome)
+        fornecedores = session.execute(stmt).scalars().all()
         for f in fornecedores:
             session.expunge(f)
         return fornecedores

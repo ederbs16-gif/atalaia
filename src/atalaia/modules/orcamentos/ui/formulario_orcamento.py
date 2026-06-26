@@ -29,6 +29,7 @@ from atalaia.modules.orcamentos.exceptions import (
     ProdutoNaoEncontradoError,
 )
 from atalaia.modules.clientes import service as cliente_service
+from atalaia.modules.clientes.ui.dialogo_cliente import DialogoCliente
 from atalaia.modules.produtos import service as produto_service
 
 _COLUNAS_ITEM = ["Produto", "Qtd", "Preço Unit.", "Subtotal"]
@@ -140,6 +141,11 @@ class FormularioOrcamento(QDialog):
         row_cli.addWidget(QLabel("Cliente *:"))
         self.combo_cliente = QComboBox()
         row_cli.addWidget(self.combo_cliente, 1)
+        self.btn_novo_cliente = QPushButton("+")
+        self.btn_novo_cliente.setMaximumWidth(32)
+        self.btn_novo_cliente.setToolTip("Novo cliente")
+        self.btn_novo_cliente.clicked.connect(self._abrir_dialogo_cliente)
+        row_cli.addWidget(self.btn_novo_cliente)
         form.addLayout(row_cli)
 
         row_cfg = QHBoxLayout()
@@ -254,6 +260,7 @@ class FormularioOrcamento(QDialog):
         if finalizado:
             self._lbl_readonly.setVisible(True)
             self.combo_cliente.setEnabled(False)
+            self.btn_novo_cliente.setEnabled(False)
             self.spin_validade.setEnabled(False)
             self.spin_desconto.setEnabled(False)
             self.txt_observacoes.setEnabled(False)
@@ -285,6 +292,13 @@ class FormularioOrcamento(QDialog):
     # ------------------------------------------------------------------
     # Ações de cabeçalho
     # ------------------------------------------------------------------
+
+    def _abrir_dialogo_cliente(self) -> None:
+        dlg = DialogoCliente(self)
+        if dlg.exec() == QDialog.Accepted:
+            novo = dlg.obter_cliente_criado()
+            if novo is not None:
+                self._popular_clientes(selecionar_id=novo.id)
 
     def _salvar_cabecalho(self) -> None:
         cliente_id = self.combo_cliente.currentData()

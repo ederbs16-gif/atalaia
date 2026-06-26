@@ -3,12 +3,11 @@ from __future__ import annotations
 from datetime import date, timedelta
 from decimal import Decimal
 
-from sqlalchemy import func, text
+from sqlalchemy import func, select
 from sqlalchemy.orm import joinedload
 
 from atalaia.db.session import get_session
 from atalaia.db.models.orcamento import Orcamento, ItemOrcamento, StatusOrcamentoEnum
-from atalaia.db.models.venda import Venda, ItemVenda, StatusVendaEnum
 from atalaia.db.models.produto import Produto
 from atalaia.db.models.cliente import Cliente
 from atalaia.db.models.configuracao import Configuracao
@@ -16,7 +15,6 @@ from atalaia.modules.orcamentos.exceptions import (
     OrcamentoNaoEncontradoError,
     OrcamentoJaFinalizadoError,
     OrcamentoVencidoError,
-    EstoqueInsuficienteError,
     ClienteNaoEncontradoError,
     ClienteInativoError,
     ProdutoNaoEncontradoError,
@@ -27,9 +25,9 @@ from atalaia.modules.produtos.service import obter_preco_vigente
 
 def _get_validade_padrao() -> int:
     with get_session() as session:
-        cfg = session.query(Configuracao).filter(
-            Configuracao.chave == "validade_orcamento_dias"
-        ).first()
+        cfg = session.execute(
+            select(Configuracao).where(Configuracao.chave == "validade_orcamento_dias")
+        ).scalar_one_or_none()
         if cfg is None:
             return 10
         try:
@@ -40,7 +38,9 @@ def _get_validade_padrao() -> int:
 
 def carregar_configs(chaves: list[str]) -> dict[str, str]:
     with get_session() as session:
-        rows = session.query(Configuracao).filter(Configuracao.chave.in_(chaves)).all()
+        rows = session.execute(
+            select(Configuracao).where(Configuracao.chave.in_(chaves))
+        ).scalars().all()
         return {r.chave: (r.valor or "") for r in rows}
 
 
@@ -62,7 +62,7 @@ def criar_orcamento(
             raise ClienteNaoEncontradoError(f"Cliente {cliente_id} não encontrado.")
         if not cliente.ativo:
             raise ClienteInativoError(f"Cliente '{cliente.nome}' está inativo.")
-        max_numero = session.query(func.max(Orcamento.numero)).scalar() or 0
+        max_numero = session.execute(select(func.max(Orcamento.numero))).scalar() or 0
         hoje = date.today()
         orc = Orcamento(
             numero=max_numero + 1,
@@ -132,58 +132,16 @@ def atualizar_orcamento(orcamento_id: int, dados: dict) -> Orcamento:
         return orc
 
 
-def aprovar_orcamento(orcamento_id: int) -> Venda:
+def aprovar_orcamento(orcamento_id: int) -> None:
     with get_session() as session:
-        orc = session.get(
-            Orcamento, orcamento_id,
-            options=[joinedload(Orcamento.itens).joinedload(ItemOrcamento.produto)],
-        )
+        orc = session.get(Orcamento, orcamento_id)
         if orc is None:
             raise OrcamentoNaoEncontradoError(f"Orçamento {orcamento_id} não encontrado.")
         if orc.status != StatusOrcamentoEnum.aberto:
             raise OrcamentoJaFinalizadoError("Orçamento já foi aprovado ou recusado.")
         if date.today() > orc.data_validade:
             raise OrcamentoVencidoError("Orçamento vencido — renove a validade antes de aprovar.")
-
         orc.status = StatusOrcamentoEnum.aprovado
-
-        subtotal = sum(i.quantidade * i.preco_unitario for i in orc.itens)
-        total = subtotal * (1 - orc.desconto_percentual / Decimal("100"))
-
-        venda = Venda(
-            orcamento_id=orc.id,
-            cliente_id=orc.cliente_id,
-            status=StatusVendaEnum.finalizada,
-            desconto_percentual=orc.desconto_percentual,
-            total=total,
-        )
-        session.add(venda)
-        session.flush()
-
-        for item in orc.itens:
-            session.add(ItemVenda(
-                venda_id=venda.id,
-                produto_id=item.produto_id,
-                quantidade=item.quantidade,
-                preco_unitario=item.preco_unitario,
-            ))
-            res = session.execute(
-                text(
-                    "UPDATE produtos"
-                    " SET estoque_atual = estoque_atual - :qtd"
-                    " WHERE id = :id AND controla_estoque = TRUE AND estoque_atual >= :qtd"
-                ),
-                {"qtd": item.quantidade, "id": item.produto_id},
-            )
-            if res.rowcount == 0:
-                prod_check = session.get(Produto, item.produto_id)
-                if prod_check and prod_check.controla_estoque:
-                    raise EstoqueInsuficienteError(
-                        f"Estoque insuficiente para '{prod_check.nome}'."
-                    )
-
-        session.expunge_all()
-        return venda
 
 
 def recusar_orcamento(orcamento_id: int) -> None:
@@ -198,13 +156,14 @@ def recusar_orcamento(orcamento_id: int) -> None:
 
 def obter_orcamento(orcamento_id: int) -> Orcamento:
     with get_session() as session:
-        orc = session.get(
-            Orcamento, orcamento_id,
-            options=[
+        orc = session.execute(
+            select(Orcamento)
+            .where(Orcamento.id == orcamento_id)
+            .options(
                 joinedload(Orcamento.cliente),
                 joinedload(Orcamento.itens).joinedload(ItemOrcamento.produto),
-            ],
-        )
+            )
+        ).unique().scalar_one_or_none()
         if orc is None:
             raise OrcamentoNaoEncontradoError(f"Orçamento {orcamento_id} não encontrado.")
         session.expunge_all()
@@ -216,11 +175,18 @@ def listar_orcamentos(
     cliente_id: int | None = None,
 ) -> list[Orcamento]:
     with get_session() as session:
-        q = session.query(Orcamento).options(joinedload(Orcamento.cliente))
+        stmt = (
+            select(Orcamento)
+            .options(
+                joinedload(Orcamento.cliente),
+                joinedload(Orcamento.itens).joinedload(ItemOrcamento.produto),
+            )
+            .order_by(Orcamento.id.desc())
+        )
         if status:
-            q = q.filter(Orcamento.status == StatusOrcamentoEnum[status])
+            stmt = stmt.where(Orcamento.status == StatusOrcamentoEnum[status])
         if cliente_id:
-            q = q.filter(Orcamento.cliente_id == cliente_id)
-        orcamentos = q.order_by(Orcamento.id.desc()).all()
+            stmt = stmt.where(Orcamento.cliente_id == cliente_id)
+        orcamentos = session.execute(stmt).unique().scalars().all()
         session.expunge_all()
-        return orcamentos
+        return list(orcamentos)

@@ -2,7 +2,7 @@ import enum
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import CheckConstraint, DateTime, Enum, ForeignKey, Integer, Numeric, func
+from sqlalchemy import CheckConstraint, DateTime, Enum, ForeignKey, Integer, Numeric, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from atalaia.db.base import Base
@@ -20,6 +20,7 @@ class Venda(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     orcamento_id: Mapped[int | None] = mapped_column(ForeignKey("orcamentos.id"), nullable=True)
     cliente_id: Mapped[int | None] = mapped_column(ForeignKey("clientes.id"), nullable=True)
+    caixa_id: Mapped[int | None] = mapped_column(ForeignKey("caixas.id"), nullable=True)
     status: Mapped[StatusVendaEnum] = mapped_column(
         Enum(StatusVendaEnum), default=StatusVendaEnum.aberta, nullable=False
     )
@@ -27,6 +28,7 @@ class Venda(Base):
         Numeric(5, 2), default=Decimal("0"), nullable=False
     )
     total: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"), nullable=False)
+    forma_pagamento_principal: Mapped[str | None] = mapped_column(String(20), nullable=True)
     criado_em: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
     )
@@ -38,6 +40,12 @@ class Venda(Base):
     cliente: Mapped["Cliente"] = relationship("Cliente", back_populates="vendas")  # noqa: F821
     itens: Mapped[list["ItemVenda"]] = relationship(
         "ItemVenda", back_populates="venda", cascade="all, delete-orphan"
+    )
+    pagamentos: Mapped[list["PagamentoVenda"]] = relationship(  # noqa: F821
+        "PagamentoVenda", back_populates="venda", cascade="all, delete-orphan"
+    )
+    devolucoes: Mapped[list["Devolucao"]] = relationship(  # noqa: F821
+        "Devolucao", back_populates="venda", cascade="all, delete-orphan"
     )
 
 

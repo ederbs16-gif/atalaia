@@ -20,7 +20,6 @@ from atalaia.modules.orcamentos import service
 from atalaia.modules.orcamentos.exceptions import (
     OrcamentoJaFinalizadoError,
     OrcamentoVencidoError,
-    EstoqueInsuficienteError,
 )
 from atalaia.modules.clientes.exceptions import ClienteInativoError
 
@@ -130,19 +129,21 @@ def test_adicionar_item_congela_preco_vigente(SM, cliente_ativo, produto_com_est
     assert item.preco_unitario == Decimal("50.00")
 
 
-def test_aprovar_orcamento_cria_venda_baixa_estoque_muda_status(SM, orcamento_aberto, produto_com_estoque):
-    venda = service.aprovar_orcamento(orcamento_aberto)
-    assert venda.id is not None
-    assert venda.status.value == "finalizada"
+def test_aprovar_orcamento_muda_status_sem_criar_venda(SM, orcamento_aberto, produto_com_estoque):
+    service.aprovar_orcamento(orcamento_aberto)
 
     with SM() as s:
         orc = s.get(Orcamento, orcamento_aberto)
         assert orc.status == StatusOrcamentoEnum.aprovado
 
     from atalaia.db.models.produto import Produto as P
+    from atalaia.db.models.venda import Venda
     with SM() as s:
         p = s.get(P, produto_com_estoque)
-        assert p.estoque_atual == 8  # 10 - 2
+        assert p.estoque_atual == 10  # estoque não é baixado
+
+        vendas = s.query(Venda).filter(Venda.orcamento_id == orcamento_aberto).all()
+        assert vendas == []  # nenhuma venda criada
 
 
 def test_aprovar_orcamento_vencido_levanta_erro(SM, orcamento_aberto):

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
@@ -64,7 +64,7 @@ def criar_categoria(nome: str) -> Categoria:
 
 def listar_categorias() -> list[Categoria]:
     with get_session() as session:
-        cats = session.query(Categoria).order_by(Categoria.nome).all()
+        cats = session.execute(select(Categoria).order_by(Categoria.nome)).scalars().all()
         for cat in cats:
             session.expunge(cat)
         return cats
@@ -195,44 +195,42 @@ def listar_produtos(
     nome_contem: str | None = None,
 ) -> list[Produto]:
     with get_session() as session:
-        q = session.query(Produto).options(joinedload(Produto.categoria))
+        stmt = select(Produto).options(joinedload(Produto.categoria))
         if apenas_ativos:
-            q = q.filter(Produto.ativo.is_(True))
+            stmt = stmt.where(Produto.ativo.is_(True))
         if tipo is not None:
-            q = q.filter(Produto.tipo == TipoEnum(tipo))
+            stmt = stmt.where(Produto.tipo == TipoEnum(tipo))
         if categoria_id is not None:
-            q = q.filter(Produto.categoria_id == categoria_id)
+            stmt = stmt.where(Produto.categoria_id == categoria_id)
         if nome_contem is not None:
-            q = q.filter(Produto.nome.ilike(f"%{nome_contem}%"))
-        produtos = q.order_by(Produto.nome).all()
-        for p in produtos:
-            session.expunge(p)
+            stmt = stmt.where(Produto.nome.ilike(f"%{nome_contem}%"))
+        stmt = stmt.order_by(Produto.nome)
+        produtos = session.execute(stmt).unique().scalars().all()
+        session.expunge_all()
         return produtos
 
 
 def obter_produto(produto_id: int) -> Produto | None:
     with get_session() as session:
-        p = (
-            session.query(Produto)
+        p = session.execute(
+            select(Produto)
             .options(joinedload(Produto.categoria))
-            .filter(Produto.id == produto_id)
-            .first()
-        )
+            .where(Produto.id == produto_id)
+        ).unique().scalar_one_or_none()
         if p is not None:
-            session.expunge(p)
+            session.expunge_all()
         return p
 
 
 def buscar_por_codigo_barras(codigo: str) -> Produto | None:
     with get_session() as session:
-        p = (
-            session.query(Produto)
+        p = session.execute(
+            select(Produto)
             .options(joinedload(Produto.categoria))
-            .filter(Produto.codigo_barras == codigo)
-            .first()
-        )
+            .where(Produto.codigo_barras == codigo)
+        ).unique().scalar_one_or_none()
         if p is not None:
-            session.expunge(p)
+            session.expunge_all()
         return p
 
 
